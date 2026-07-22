@@ -1,27 +1,251 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap');
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --bg-color: #f7f7f9;
+  --surface: #ffffff;
+  --text-primary: #1d1d1f;
+  --text-secondary: #86868b;
+  --accent: #ff4757;
+  --accent-hover: #ff6b81;
+  --accent-glow: rgba(255, 71, 87, 0.3);
+  --border: rgba(0, 0, 0, 0.05);
+  --shadow-soft: 0 10px 30px rgba(0, 0, 0, 0.04);
+  --shadow-heavy: 0 25px 50px -12px rgba(0, 0, 0, 0.15);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --bg-color: #000000;
+    --surface: #1c1c1e;
+    --text-primary: #f5f5f7;
+    --text-secondary: #a1a1a6;
+    --border: rgba(255, 255, 255, 0.1);
+    --shadow-soft: 0 10px 30px rgba(0, 0, 0, 0.2);
+    --shadow-heavy: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
   }
 }
 
-body {
-  color: var(--foreground);
-  background: var(--background);
-  font-family: Arial, Helvetica, sans-serif;
+* {
+  box-sizing: border-box;
+  padding: 0;
+  margin: 0;
 }
 
-@layer utilities {
-  .text-balance {
-    text-wrap: balance;
+body {
+  font-family: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
+  background-color: #050505;
+  background-image: radial-gradient(circle at 50% 0%, #1a1a2e 0%, #050505 70%);
+  color: var(--text-primary);
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Fullscreen Background Visualizer */
+.visualizer-canvas {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: -1;
+  pointer-events: none;
+  opacity: 0.8;
+}
+
+main {
+  width: 100%;
+  max-width: 1000px;
+  padding: 2rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2.5rem;
+}
+
+header {
+  text-align: center;
+  animation: fadeUp 1s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+h1 {
+  font-size: clamp(2.5rem, 5vw, 4rem);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  margin-bottom: 0.75rem;
+  line-height: 1.1;
+}
+
+p.subtitle {
+  font-size: clamp(1rem, 2vw, 1.25rem);
+  color: var(--text-secondary);
+  font-weight: 400;
+  max-width: 500px;
+  margin: 0 auto;
+  line-height: 1.5;
+}
+
+/* Face Filter Container Styles */
+.filter-container {
+  position: relative;
+  width: 100%;
+  max-width: 1200px;
+  aspect-ratio: 16/9;
+  max-height: 85vh;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 40px;
+  overflow: hidden;
+  box-shadow: var(--shadow-heavy);
+  animation: scaleUp 1s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  transform-origin: center bottom;
+}
+
+.camera-wrapper {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  border-radius: 40px;
+  overflow: hidden;
+  background: #000;
+}
+
+.camera-video, .camera-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform: scaleX(-1); /* Mirror effect */
+}
+
+.camera-canvas {
+  z-index: 10;
+  pointer-events: none;
+}
+
+.camera-video {
+  z-index: 1;
+  opacity: 0.8; /* Slight organic blend */
+}
+
+/* Overlays */
+.loading-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  z-index: 20;
+  gap: 1.5rem;
+  border-radius: 40px;
+}
+
+.loading-overlay.start-screen {
+  background: var(--surface);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.spinner {
+  width: 40px;
+  height: 40px;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 1s cubic-bezier(0.6, 0.1, 0.4, 0.9) infinite;
+}
+
+.loading-overlay p {
+  font-size: 1.1rem;
+  color: var(--text-secondary);
+  font-weight: 500;
+  animation: pulseText 2s ease-in-out infinite;
+}
+
+/* Elegant Buttons */
+.btn-primary {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  padding: 1.2rem 2.5rem;
+  border-radius: 100px;
+  font-size: 1.25rem;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  box-shadow: 0 8px 20px var(--accent-glow);
+  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.btn-primary:hover {
+  transform: translateY(-2px) scale(1.02);
+  background: var(--accent-hover);
+  box-shadow: 0 12px 25px var(--accent-glow);
+}
+
+.btn-primary:active {
+  transform: translateY(1px) scale(0.98);
+}
+
+/* Animations */
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes pulseText {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+
+@keyframes fadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(30px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes scaleUp {
+  from {
+    opacity: 0;
+    transform: scale(0.9) translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+@media (max-width: 768px) {
+  .filter-container {
+    aspect-ratio: 3/4;
+    border-radius: 32px;
+  }
+  .loading-overlay {
+    border-radius: 32px;
+  }
+  main {
+    padding: 1.5rem;
+    gap: 1.5rem;
   }
 }
