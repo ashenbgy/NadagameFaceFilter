@@ -56,6 +56,7 @@ export default function FaceFilter() {
     // 1. Start Audio & Analysis
     const audio = audioRef.current;
     if (audio && !audioContextRef.current) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
       const ctx = new AudioContext();
       audioContextRef.current = ctx;
