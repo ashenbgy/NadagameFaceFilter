@@ -9,14 +9,14 @@ export default function Home() {
   return (
     <main>
       <header>
-        <h1>Immersive AR</h1>
+        <h1>YAKA AR</h1>
         <p className="subtitle">
           Experience a beautiful, audio-reactive digital mask that tracks your facial expressions in real time.
         </p>
       </header>
-      
+
       <FaceFilter />
-      
+
     </main>
   );
 }

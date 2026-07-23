@@ -75,6 +75,39 @@ export default function FaceFilter() {
     setHasStarted(true);
   };
 
+  const stopExperience = () => {
+    setHasStarted(false);
+    
+    // Stop audio
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.currentTime = 0;
+    }
+  };
+
+  const captureScreen = () => {
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    if (!video || !canvas) return;
+
+    const tempCanvas = document.createElement("canvas");
+    tempCanvas.width = video.videoWidth || canvas.width;
+    tempCanvas.height = video.videoHeight || canvas.height;
+    const ctx = tempCanvas.getContext("2d");
+    if (!ctx) return;
+
+    // Draw the video frame
+    ctx.drawImage(video, 0, 0, tempCanvas.width, tempCanvas.height);
+    // Draw the filter overlay
+    ctx.drawImage(canvas, 0, 0, tempCanvas.width, tempCanvas.height);
+
+    const dataUrl = tempCanvas.toDataURL("image/png");
+    const link = document.createElement("a");
+    link.download = "face-filter-capture.png";
+    link.href = dataUrl;
+    link.click();
+  };
+
   // Run camera and animation loop once started
   useEffect(() => {
     if (!hasStarted || !isModelLoaded || !faceLandmarker) return;
@@ -246,8 +279,9 @@ export default function FaceFilter() {
 
     return () => {
       cancelAnimationFrame(animationFrameIdRef.current);
-      if (video.srcObject) {
+      if (video && video.srcObject) {
         (video.srcObject as MediaStream).getTracks().forEach((track) => track.stop());
+        video.srcObject = null;
       }
     };
   }, [hasStarted, isModelLoaded, faceLandmarker]);
@@ -282,7 +316,7 @@ export default function FaceFilter() {
         </div>
       )}
 
-      <div className="camera-wrapper">
+      <div className="camera-wrapper" style={{ position: 'relative' }}>
         <video 
           ref={videoRef} 
           autoPlay 
@@ -294,6 +328,32 @@ export default function FaceFilter() {
           ref={canvasRef} 
           className="camera-canvas"
         />
+        
+        {hasStarted && (
+          <div style={{ position: 'absolute', bottom: '2rem', left: '0', right: '0', display: 'flex', justifyContent: 'center', gap: '1rem', zIndex: 10 }}>
+            <button 
+              className="btn-primary" 
+              onClick={captureScreen} 
+              style={{ backgroundColor: 'rgba(16, 185, 129, 0.9)', backdropFilter: 'blur(4px)', padding: '0.75rem 1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
+                <circle cx="12" cy="13" r="4"></circle>
+              </svg>
+              Capture
+            </button>
+            <button 
+              className="btn-primary" 
+              onClick={stopExperience} 
+              style={{ backgroundColor: 'rgba(239, 68, 68, 0.9)', backdropFilter: 'blur(4px)', padding: '0.75rem 1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+              </svg>
+              Stop
+            </button>
+          </div>
+        )}
       </div>
       </div>
     </div>
