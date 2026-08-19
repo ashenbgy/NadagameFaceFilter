@@ -395,6 +395,13 @@ p.subtitle {
   color: #d5d0ff;
 }
 
+.ghost-status small {
+  margin-left: 0.65rem;
+  color: rgba(255, 255, 255, 0.42);
+  font-size: 0.58rem;
+  letter-spacing: 0.08em;
+}
+
 .plate-guide {
   position: absolute;
   top: 50%;
@@ -469,6 +476,37 @@ p.subtitle {
   gap: 0.5rem;
 }
 
+.ghost-meter {
+  position: absolute;
+  bottom: 1.4rem;
+  left: 1.35rem;
+  z-index: 14;
+  width: min(210px, 24%);
+  color: #ffd9a0;
+  font-size: 0.64rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  pointer-events: none;
+}
+
+.ghost-meter > div {
+  height: 6px;
+  margin-top: 0.45rem;
+  overflow: hidden;
+  border: 1px solid rgba(255, 190, 132, 0.28);
+  border-radius: 100px;
+  background: rgba(0, 0, 0, 0.38);
+}
+
+.ghost-meter i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #c4772f, #ffd479);
+  box-shadow: 0 0 12px rgba(255, 190, 100, 0.72);
+  transition: width 60ms linear;
+}
+
 .control-button {
   padding: 0.68rem 1rem;
   border: 1px solid rgba(255, 255, 255, 0.15);
@@ -488,6 +526,11 @@ p.subtitle {
   border-color: rgba(126, 255, 230, 0.45);
   color: #bafff1;
   transform: translateY(-1px);
+}
+
+.control-button.is-active {
+  border-color: rgba(126, 255, 230, 0.28);
+  color: #a7ffef;
 }
 
 .control-button--stop:hover {
@@ -685,13 +728,46 @@ p.subtitle {
     max-width: 52%;
     text-align: right;
   }
+  .ghost-status small {
+    display: block;
+    margin: 0.25rem 0 0;
+  }
+  .ghost-meter {
+    bottom: 4.6rem;
+    left: 1rem;
+    width: 150px;
+  }
+  .ghost-controls {
+    right: 0.65rem;
+    bottom: 0.75rem;
+    left: 0.65rem;
+    flex-wrap: wrap;
+  }
+  .control-button {
+    padding: 0.55rem 0.72rem;
+    font-size: 0.66rem;
+  }
   .ghost-steps {
+    flex-wrap: wrap;
     gap: 0.4rem;
     font-size: 0.64rem;
   }
   .ghost-steps i {
     width: 10px;
   }
+}
+
+.ghost-container:fullscreen {
+  width: 100vw;
+  max-width: none;
+  height: 100vh;
+  max-height: none;
+  border: 0;
+  border-radius: 0;
+}
+
+.ghost-container:fullscreen .camera-wrapper {
+  border-radius: 0;
 }
 
 @media (prefers-reduced-motion: reduce) {

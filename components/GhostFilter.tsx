@@ -1,69 +1,102 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  FilesetResolver,
-  HandLandmarker,
-  ImageSegmenter,
-} from "@mediapipe/tasks-vision";
+import { FilesetResolver, HandLandmarker, ImageSegmenter } from "@mediapipe/tasks-vision";
 
-const WASM_PATH =
-  "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm";
-const SEGMENTER_MODEL =
-  "https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter_landscape/float16/latest/selfie_segmenter_landscape.tflite";
-const HAND_MODEL =
-  "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
+const WASM_PATH = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm";
+const SEGMENTER_MODEL = "https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter_landscape/float16/latest/selfie_segmenter_landscape.tflite";
+const HAND_MODEL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
 
 type GhostPhase = "setup" | "live" | "vanished";
+type Point = { x: number; y: number; z: number };
+const HAND_CONNECTIONS = HandLandmarker.HAND_CONNECTIONS;
+
+function makeCanvas(width = 0, height = 0) {
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  return canvas;
+}
 
 export default function GhostFilter() {
+  const containerRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const outputRef = useRef<HTMLCanvasElement>(null);
-  const plateRef = useRef<HTMLCanvasElement | null>(null);
-  const maskRef = useRef<HTMLCanvasElement | null>(null);
-  const personRef = useRef<HTMLCanvasElement | null>(null);
-  const pinchLatchedRef = useRef(false);
   const streamRef = useRef<MediaStream | null>(null);
   const segmenterRef = useRef<ImageSegmenter | null>(null);
   const handLandmarkerRef = useRef<HandLandmarker | null>(null);
-  const plateReadyRef = useRef(false);
+  const plateRef = useRef<HTMLCanvasElement | null>(null);
   const phaseRef = useRef<GhostPhase>("setup");
-  const pinchingRef = useRef(false);
-  const handLandmarksRef = useRef<Array<{ x: number; y: number; z: number }> | null>(null);
-  const lastHandSeenAtRef = useRef(0);
+  const plateReadyRef = useRef(false);
+  const healingRef = useRef(true);
+  const handsRef = useRef<Point[][]>([]);
+  const pinchLatchedRef = useRef(false);
   const lastPinchAtRef = useRef(0);
   const lastVideoTimeRef = useRef(-1);
+  const ghostAmountRef = useRef(0);
+  const ghostTargetRef = useRef(0);
   const countdownTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
 
   const [isModelLoaded, setIsModelLoaded] = useState(false);
   const [hasStarted, setHasStarted] = useState(false);
   const [phase, setPhase] = useState<GhostPhase>("setup");
   const [countdown, setCountdown] = useState<number | null>(null);
   const [isPinching, setIsPinching] = useState(false);
+  const [handCount, setHandCount] = useState(0);
+  const [ghostPercent, setGhostPercent] = useState(0);
+  const [fps, setFps] = useState(0);
+  const [healing, setHealing] = useState(true);
   const [error, setError] = useState("");
 
   const setGhostPhase = useCallback((next: GhostPhase) => {
     phaseRef.current = next;
+    ghostTargetRef.current = next === "vanished" ? 1 : 0;
     setPhase(next);
   }, []);
 
+  const playWhoosh = useCallback((vanishing: boolean) => {
+    const audioContext = audioContextRef.current ?? new AudioContext();
+    audioContextRef.current = audioContext;
+    if (audioContext.state === "suspended") void audioContext.resume();
+
+    const start = audioContext.currentTime;
+    const duration = 0.55;
+    const oscillator = audioContext.createOscillator();
+    const gain = audioContext.createGain();
+    oscillator.type = "sine";
+    oscillator.frequency.setValueAtTime(vanishing ? 320 : 85, start);
+    oscillator.frequency.exponentialRampToValueAtTime(vanishing ? 75 : 360, start + duration);
+    gain.gain.setValueAtTime(0.0001, start);
+    gain.gain.exponentialRampToValueAtTime(0.12, start + 0.06);
+    gain.gain.exponentialRampToValueAtTime(0.0001, start + duration);
+    oscillator.connect(gain).connect(audioContext.destination);
+    oscillator.start(start);
+    oscillator.stop(start + duration);
+  }, []);
+
+  const toggleGhost = useCallback(() => {
+    if (!plateReadyRef.current) return;
+    const vanishing = phaseRef.current !== "vanished";
+    setGhostPhase(vanishing ? "vanished" : "live");
+    playWhoosh(vanishing);
+  }, [playWhoosh, setGhostPhase]);
+
   const capturePlate = useCallback(() => {
     const video = videoRef.current;
-    if (!video || !video.videoWidth) return;
-
-    const plate = plateRef.current ?? document.createElement("canvas");
+    if (!video?.videoWidth) return;
+    const plate = plateRef.current ?? makeCanvas();
     plate.width = video.videoWidth;
     plate.height = video.videoHeight;
     plate.getContext("2d")?.drawImage(video, 0, 0, plate.width, plate.height);
     plateRef.current = plate;
     plateReadyRef.current = true;
-    setGhostPhase("live");
     setCountdown(null);
+    setGhostPhase("live");
   }, [setGhostPhase]);
 
   const beginPlateCountdown = useCallback(() => {
     if (countdownTimerRef.current || plateReadyRef.current) return;
-
     let remaining = 3;
     setCountdown(remaining);
     countdownTimerRef.current = setInterval(() => {
@@ -72,29 +105,31 @@ export default function GhostFilter() {
         setCountdown(remaining);
         return;
       }
-
       if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
       countdownTimerRef.current = null;
       capturePlate();
     }, 1000);
   }, [capturePlate]);
 
-  const handlePinch = useCallback(() => {
-    const now = performance.now();
-    if (now - lastPinchAtRef.current < 900) return;
-    lastPinchAtRef.current = now;
+  const resetPlate = useCallback(() => {
+    if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
+    countdownTimerRef.current = null;
+    plateReadyRef.current = false;
+    plateRef.current = null;
+    ghostAmountRef.current = 0;
+    ghostTargetRef.current = 0;
+    setGhostPercent(0);
+    setCountdown(null);
+    setGhostPhase("setup");
+  }, [setGhostPhase]);
 
-    if (!plateReadyRef.current) {
-      beginPlateCountdown();
-      return;
-    }
-
-    setGhostPhase(phaseRef.current === "vanished" ? "live" : "vanished");
-  }, [beginPlateCountdown, setGhostPhase]);
+  const toggleHealing = useCallback(() => {
+    healingRef.current = !healingRef.current;
+    setHealing(healingRef.current);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
-
     async function loadModels() {
       try {
         const vision = await FilesetResolver.forVisionTasks(WASM_PATH);
@@ -108,13 +143,12 @@ export default function GhostFilter() {
           HandLandmarker.createFromOptions(vision, {
             baseOptions: { modelAssetPath: HAND_MODEL, delegate: "GPU" },
             runningMode: "VIDEO",
-            numHands: 1,
-            minHandDetectionConfidence: 0.42,
-            minHandPresenceConfidence: 0.42,
-            minTrackingConfidence: 0.4,
+            numHands: 2,
+            minHandDetectionConfidence: 0.48,
+            minHandPresenceConfidence: 0.45,
+            minTrackingConfidence: 0.45,
           }),
         ]);
-
         if (cancelled) {
           segmenter.close();
           handLandmarker.close();
@@ -128,8 +162,7 @@ export default function GhostFilter() {
         setError("Ghost Mode could not load its AI models. Check your connection and reload.");
       }
     }
-
-    loadModels();
+    void loadModels();
     return () => {
       cancelled = true;
       segmenterRef.current?.close();
@@ -144,217 +177,202 @@ export default function GhostFilter() {
     const video = videoRef.current;
     const output = outputRef.current;
     const segmenter = segmenterRef.current;
-    const hands = handLandmarkerRef.current;
-    if (!video || !output || !segmenter || !hands) return;
+    const handLandmarker = handLandmarkerRef.current;
+    if (!video || !output || !segmenter || !handLandmarker) return;
     const activeVideo = video;
 
-    const maskCanvas = document.createElement("canvas");
-    const personCanvas = document.createElement("canvas");
-    maskRef.current = maskCanvas;
-    personRef.current = personCanvas;
-
+    const maskCanvas = makeCanvas();
+    const personMaskCanvas = makeCanvas();
+    const ghostLayerCanvas = makeCanvas();
+    const safeFrameCanvas = makeCanvas();
     let stopped = false;
+    let animationFrameId = 0;
     let lastHandCheck = 0;
+    let lastHandSeenAt = 0;
+    let frameCount = 0;
+    let fpsStartedAt = performance.now();
+    let lastPercent = -1;
+
+    const resizeBuffers = (width: number, height: number) => {
+      for (const canvas of [output, personMaskCanvas, ghostLayerCanvas, safeFrameCanvas]) {
+        if (canvas.width !== width || canvas.height !== height) {
+          canvas.width = width;
+          canvas.height = height;
+        }
+      }
+    };
+
+    const drawHandHud = (ctx: CanvasRenderingContext2D, trackedHands: Point[][], width: number, height: number) => {
+      ctx.save();
+      ctx.strokeStyle = "rgba(255, 190, 132, 0.88)";
+      ctx.fillStyle = "#ffd479";
+      ctx.lineWidth = Math.max(1.6, width / 700);
+      ctx.shadowColor = "rgba(255, 145, 90, 0.75)";
+      ctx.shadowBlur = 8;
+      for (const hand of trackedHands) {
+        for (const connection of HAND_CONNECTIONS) {
+          const start = hand[connection.start];
+          const end = hand[connection.end];
+          if (!start || !end) continue;
+          ctx.beginPath();
+          ctx.moveTo(start.x * width, start.y * height);
+          ctx.lineTo(end.x * width, end.y * height);
+          ctx.stroke();
+        }
+        hand.forEach((point, index) => {
+          ctx.beginPath();
+          ctx.arc(point.x * width, point.y * height, index === 4 || index === 8 ? 4.5 : 2.2, 0, Math.PI * 2);
+          ctx.fill();
+        });
+      }
+      if (trackedHands.length === 2) {
+        const centers = trackedHands.map((hand) => {
+          const ids = [0, 5, 9, 13, 17];
+          const sum = ids.reduce((acc, id) => ({ x: acc.x + hand[id].x, y: acc.y + hand[id].y }), { x: 0, y: 0 });
+          return { x: (sum.x / ids.length) * width, y: (sum.y / ids.length) * height };
+        });
+        const left = Math.min(centers[0].x, centers[1].x);
+        const right = Math.max(centers[0].x, centers[1].x);
+        const middleY = (centers[0].y + centers[1].y) / 2;
+        const portalWidth = Math.max(180, right - left - 30);
+        const portalHeight = Math.max(120, portalWidth * 0.58);
+        ctx.strokeStyle = "rgba(255, 212, 121, 0.72)";
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect((left + right - portalWidth) / 2, middleY - portalHeight / 2, portalWidth, portalHeight);
+      }
+      ctx.restore();
+    };
 
     const renderFrame = () => {
       if (stopped) return;
-      if (activeVideo.readyState >= 2 && activeVideo.currentTime !== lastVideoTimeRef.current) {
-        lastVideoTimeRef.current = activeVideo.currentTime;
-        const width = activeVideo.videoWidth;
-        const height = activeVideo.videoHeight;
+      if (video.readyState >= 2 && video.currentTime !== lastVideoTimeRef.current) {
+        lastVideoTimeRef.current = video.currentTime;
+        const width = video.videoWidth;
+        const height = video.videoHeight;
+        resizeBuffers(width, height);
+        const now = performance.now();
+        const ctx = output.getContext("2d");
+        const personMaskCtx = personMaskCanvas.getContext("2d");
+        const ghostLayerCtx = ghostLayerCanvas.getContext("2d");
+        const safeFrameCtx = safeFrameCanvas.getContext("2d");
 
-        if (width && height) {
-          if (output.width !== width || output.height !== height) {
-            output.width = width;
-            output.height = height;
-            personCanvas.width = width;
-            personCanvas.height = height;
+        if (ctx && personMaskCtx && ghostLayerCtx && safeFrameCtx) {
+          const segmentation = segmenter.segmentForVideo(video, now);
+          const confidenceMask = segmentation.confidenceMasks?.[0];
+          if (confidenceMask) {
+            const values = confidenceMask.getAsFloat32Array();
+            if (maskCanvas.width !== confidenceMask.width || maskCanvas.height !== confidenceMask.height) {
+              maskCanvas.width = confidenceMask.width;
+              maskCanvas.height = confidenceMask.height;
+            }
+            const maskCtx = maskCanvas.getContext("2d");
+            if (maskCtx) {
+              const image = maskCtx.createImageData(maskCanvas.width, maskCanvas.height);
+              for (let i = 0; i < values.length; i += 1) {
+                const confidence = Math.max(0, Math.min(1, (values[i] - 0.12) * 1.7));
+                const offset = i * 4;
+                image.data[offset] = 255;
+                image.data[offset + 1] = 255;
+                image.data[offset + 2] = 255;
+                image.data[offset + 3] = confidence * 255;
+              }
+              maskCtx.putImageData(image, 0, 0);
+              personMaskCtx.clearRect(0, 0, width, height);
+              personMaskCtx.filter = "blur(5px)";
+              personMaskCtx.drawImage(maskCanvas, 0, 0, width, height);
+              personMaskCtx.filter = "none";
+
+              const plate = plateRef.current;
+              if (plateReadyRef.current && plate) {
+                if (healingRef.current) {
+                  safeFrameCtx.clearRect(0, 0, width, height);
+                  safeFrameCtx.drawImage(video, 0, 0, width, height);
+                  safeFrameCtx.globalCompositeOperation = "destination-out";
+                  safeFrameCtx.drawImage(personMaskCanvas, 0, 0, width, height);
+                  safeFrameCtx.globalCompositeOperation = "source-over";
+                  const plateCtx = plate.getContext("2d");
+                  if (plateCtx) {
+                    plateCtx.globalAlpha = 0.018;
+                    plateCtx.drawImage(safeFrameCanvas, 0, 0, width, height);
+                    plateCtx.globalAlpha = 1;
+                  }
+                }
+                ghostAmountRef.current += (ghostTargetRef.current - ghostAmountRef.current) * 0.09;
+                if (Math.abs(ghostTargetRef.current - ghostAmountRef.current) < 0.004) ghostAmountRef.current = ghostTargetRef.current;
+                ctx.clearRect(0, 0, width, height);
+                ctx.drawImage(video, 0, 0, width, height);
+                if (ghostAmountRef.current > 0.004) {
+                  ghostLayerCtx.clearRect(0, 0, width, height);
+                  ghostLayerCtx.drawImage(plate, 0, 0, width, height);
+                  ghostLayerCtx.globalCompositeOperation = "destination-in";
+                  ghostLayerCtx.drawImage(personMaskCanvas, 0, 0, width, height);
+                  ghostLayerCtx.globalCompositeOperation = "source-over";
+                  ctx.globalAlpha = ghostAmountRef.current;
+                  ctx.drawImage(ghostLayerCanvas, 0, 0, width, height);
+                  ctx.globalAlpha = 1;
+                }
+              } else {
+                ctx.clearRect(0, 0, width, height);
+                ctx.drawImage(video, 0, 0, width, height);
+              }
+            }
+          } else {
+            ctx.clearRect(0, 0, width, height);
+            ctx.drawImage(video, 0, 0, width, height);
           }
 
-          const now = performance.now();
-          const ctx = output.getContext("2d");
-          const personCtx = personCanvas.getContext("2d");
-
-          if (ctx && personCtx) {
-            if (!plateReadyRef.current) {
-              ctx.clearRect(0, 0, width, height);
-              ctx.drawImage(activeVideo, 0, 0, width, height);
-            } else {
-              const result = segmenter.segmentForVideo(activeVideo, now);
-              const confidenceMask = result.confidenceMasks?.[0];
-              const plate = plateRef.current;
-
-              if (confidenceMask && plate) {
-                const values = confidenceMask.getAsFloat32Array();
-                if (
-                  maskCanvas.width !== confidenceMask.width ||
-                  maskCanvas.height !== confidenceMask.height
-                ) {
-                  maskCanvas.width = confidenceMask.width;
-                  maskCanvas.height = confidenceMask.height;
-                }
-                const maskCtx = maskCanvas.getContext("2d");
-                if (maskCtx) {
-                  const image = maskCtx.createImageData(maskCanvas.width, maskCanvas.height);
-                  for (let i = 0; i < values.length; i += 1) {
-                    const alpha = Math.max(0, Math.min(255, (values[i] - 0.08) * 290));
-                    const p = i * 4;
-                    image.data[p] = 255;
-                    image.data[p + 1] = 255;
-                    image.data[p + 2] = 255;
-                    image.data[p + 3] = alpha;
-                  }
-                  maskCtx.putImageData(image, 0, 0);
-
-                  personCtx.clearRect(0, 0, width, height);
-                  personCtx.drawImage(activeVideo, 0, 0, width, height);
-                  personCtx.globalCompositeOperation = "destination-in";
-                  personCtx.imageSmoothingEnabled = true;
-                  personCtx.drawImage(maskCanvas, 0, 0, width, height);
-                  personCtx.globalCompositeOperation = "source-over";
-
-                  ctx.clearRect(0, 0, width, height);
-                  ctx.drawImage(plate, 0, 0, width, height);
-
-                  if (phaseRef.current === "live") {
-                    ctx.drawImage(personCanvas, 0, 0, width, height);
-                  }
-                }
-              }
-            }
-
-            if (now - lastHandCheck > 60) {
-              lastHandCheck = now;
-              const handResult = hands.detectForVideo(activeVideo, now);
-              const landmarks = handResult.landmarks[0];
-
-              if (landmarks) {
-                const previous = handLandmarksRef.current;
-                handLandmarksRef.current = landmarks.map((point, index) => {
-                  const oldPoint = previous?.[index];
-                  if (!oldPoint) return { x: point.x, y: point.y, z: point.z };
-
-                  // Smooth small inference jumps without making the overlay laggy.
-                  const newWeight = 0.48;
-                  const oldWeight = 1 - newWeight;
-                  return {
-                    x: oldPoint.x * oldWeight + point.x * newWeight,
-                    y: oldPoint.y * oldWeight + point.y * newWeight,
-                    z: oldPoint.z * oldWeight + point.z * newWeight,
-                  };
-                });
-                lastHandSeenAtRef.current = now;
-
-                const thumb = landmarks[4];
-                const index = landmarks[8];
-                const wrist = landmarks[0];
-                const middleKnuckle = landmarks[9];
-                const pinchDistance = Math.hypot(
-                  thumb.x - index.x,
-                  thumb.y - index.y,
-                  thumb.z - index.z
-                );
-                const palmSize = Math.max(
-                  0.04,
-                  Math.hypot(wrist.x - middleKnuckle.x, wrist.y - middleKnuckle.y)
-                );
-                const pinching = pinchDistance / palmSize < 0.42;
-
-                if (pinching !== pinchingRef.current) {
-                  pinchingRef.current = pinching;
-                  setIsPinching(pinching);
-                }
-                // Toggle only on the leading edge. A missed tracking frame does
-                // not count as a release; an open hand must actually be seen.
-                if (pinching && !pinchLatchedRef.current) handlePinch();
-                pinchLatchedRef.current = pinching;
-              } else if (now - lastHandSeenAtRef.current > 1100) {
-                // Keep coordinates visible through brief fingertip occlusions.
-                handLandmarksRef.current = null;
-                pinchingRef.current = false;
-                pinchLatchedRef.current = false;
-                setIsPinching(false);
-              }
-            }
-
-            const trackedHand = handLandmarksRef.current;
-            if (trackedHand) {
-              ctx.save();
-              ctx.strokeStyle = "rgba(105, 255, 226, 0.72)";
-              ctx.lineWidth = Math.max(1.5, width / 720);
-              ctx.shadowColor = "rgba(55, 255, 218, 0.8)";
-              ctx.shadowBlur = 8;
-
-              if (phaseRef.current === "live") {
-                for (const connection of HandLandmarker.HAND_CONNECTIONS) {
-                  const start = trackedHand[connection.start];
-                  const end = trackedHand[connection.end];
-                  if (!start || !end) continue;
-                  ctx.beginPath();
-                  ctx.moveTo(start.x * width, start.y * height);
-                  ctx.lineTo(end.x * width, end.y * height);
-                  ctx.stroke();
-                }
-              }
-
-              trackedHand.forEach((landmark, index) => {
-                const isPinchPoint = index === 4 || index === 8;
-                ctx.beginPath();
-                ctx.fillStyle = isPinchPoint ? "#ffffff" : "#62ffe0";
-                ctx.arc(
-                  landmark.x * width,
-                  landmark.y * height,
-                  isPinchPoint ? 5 : 2.5,
-                  0,
-                  Math.PI * 2
-                );
-                ctx.fill();
+          if (now - lastHandCheck > 55) {
+            lastHandCheck = now;
+            const detectedHands = handLandmarker.detectForVideo(video, now).landmarks;
+            if (detectedHands.length) {
+              const previousHands = handsRef.current;
+              handsRef.current = detectedHands.map((hand, handIndex) => hand.map((point, pointIndex) => {
+                const previous = previousHands[handIndex]?.[pointIndex];
+                if (!previous) return { x: point.x, y: point.y, z: point.z };
+                return { x: previous.x * 0.5 + point.x * 0.5, y: previous.y * 0.5 + point.y * 0.5, z: previous.z * 0.5 + point.z * 0.5 };
+              }));
+              lastHandSeenAt = now;
+              const pinching = detectedHands.some((hand) => {
+                const [wrist, thumb, index, middleKnuckle] = [hand[0], hand[4], hand[8], hand[9]];
+                const pinchDistance = Math.hypot(thumb.x - index.x, thumb.y - index.y, thumb.z - index.z);
+                const palmSize = Math.max(0.04, Math.hypot(wrist.x - middleKnuckle.x, wrist.y - middleKnuckle.y));
+                return pinchDistance / palmSize < 0.34;
               });
-              ctx.restore();
-
-              // Counter-mirror text so coordinates stay readable on the mirrored canvas.
-              ctx.save();
-              ctx.translate(width, 0);
-              ctx.scale(-1, 1);
-              ctx.font = `600 ${Math.max(11, width / 85)}px monospace`;
-              ctx.textBaseline = "bottom";
-              [
-                { index: 4, label: "THUMB" },
-                { index: 8, label: "INDEX" },
-              ].forEach(({ index, label }) => {
-                const point = trackedHand[index];
-                if (!point) return;
-                const coordinateText = `${label}  x ${point.x.toFixed(3)}  y ${point.y.toFixed(3)}  z ${point.z.toFixed(3)}`;
-                const metrics = ctx.measureText(coordinateText);
-                const desiredX = (1 - point.x) * width + 10;
-                const desiredY = point.y * height + (label === "THUMB" ? -12 : 24);
-                const labelX = Math.max(8, Math.min(desiredX, width - metrics.width - 8));
-                const labelY = Math.max(22, Math.min(desiredY, height - 8));
-                ctx.fillStyle = "rgba(2, 10, 10, 0.76)";
-                ctx.fillRect(labelX - 5, labelY - 16, metrics.width + 10, 20);
-                ctx.fillStyle = "#bafff1";
-                ctx.fillText(coordinateText, labelX, labelY);
-              });
-              ctx.restore();
+              setIsPinching(pinching);
+              if (pinching && !pinchLatchedRef.current && now - lastPinchAtRef.current > 800) {
+                lastPinchAtRef.current = now;
+                if (plateReadyRef.current) toggleGhost();
+                else beginPlateCountdown();
+              }
+              pinchLatchedRef.current = pinching;
+            } else if (now - lastHandSeenAt > 750) {
+              handsRef.current = [];
+              pinchLatchedRef.current = false;
+              setIsPinching(false);
             }
+          }
+
+          drawHandHud(ctx, handsRef.current, width, height);
+          setHandCount((current) => current === handsRef.current.length ? current : handsRef.current.length);
+          const roundedPercent = Math.round(ghostAmountRef.current * 100);
+          if (roundedPercent !== lastPercent) {
+            lastPercent = roundedPercent;
+            setGhostPercent(roundedPercent);
+          }
+          frameCount += 1;
+          if (now - fpsStartedAt >= 1000) {
+            setFps(Math.round((frameCount * 1000) / (now - fpsStartedAt)));
+            frameCount = 0;
+            fpsStartedAt = now;
           }
         }
       }
-      const animationId = requestAnimationFrame(renderFrame);
-      animationFrameId = animationId;
+      animationFrameId = requestAnimationFrame(renderFrame);
     };
 
-    let animationFrameId = 0;
     async function startCamera() {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            facingMode: "user",
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
-          },
-          audio: false,
-        });
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
         if (stopped) {
           stream.getTracks().forEach((track) => track.stop());
           return;
@@ -368,8 +386,7 @@ export default function GhostFilter() {
         setError("Camera access is required for Ghost Mode.");
       }
     }
-
-    startCamera();
+    void startCamera();
     return () => {
       stopped = true;
       cancelAnimationFrame(animationFrameId);
@@ -377,39 +394,44 @@ export default function GhostFilter() {
       streamRef.current = null;
       activeVideo.srcObject = null;
     };
-  }, [handlePinch, hasStarted, isModelLoaded]);
+  }, [beginPlateCountdown, hasStarted, isModelLoaded, toggleGhost]);
 
   useEffect(() => {
-    return () => {
-      if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
+    if (!hasStarted) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.repeat) return;
+      if (event.code === "Space" && !plateReadyRef.current) {
+        event.preventDefault();
+        capturePlate();
+      } else if (event.key.toLowerCase() === "b") resetPlate();
+      else if (event.key.toLowerCase() === "g") toggleGhost();
+      else if (event.key.toLowerCase() === "h") toggleHealing();
+      else if (event.key.toLowerCase() === "f") void containerRef.current?.requestFullscreen();
     };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [capturePlate, hasStarted, resetPlate, toggleGhost, toggleHealing]);
+
+  useEffect(() => () => {
+    if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
+    void audioContextRef.current?.close();
   }, []);
 
   const startExperience = () => {
-    plateReadyRef.current = false;
-    setGhostPhase("setup");
+    // Create audio during the click gesture so later pinch-triggered sounds are allowed.
+    audioContextRef.current ??= new AudioContext();
+    resetPlate();
     setHasStarted(true);
   };
-
-  const resetPlate = () => {
-    if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
-    countdownTimerRef.current = null;
-    plateReadyRef.current = false;
-    plateRef.current = null;
-    setGhostPhase("setup");
-    setCountdown(null);
-  };
-
   const stopExperience = () => {
     setHasStarted(false);
-    handLandmarksRef.current = null;
-    lastHandSeenAtRef.current = 0;
-    pinchingRef.current = false;
+    handsRef.current = [];
     pinchLatchedRef.current = false;
     setIsPinching(false);
+    setHandCount(0);
+    setFps(0);
     resetPlate();
   };
-
   const captureScreen = () => {
     const canvas = outputRef.current;
     if (!canvas) return;
@@ -419,102 +441,43 @@ export default function GhostFilter() {
     link.click();
   };
 
-  const statusText = !plateReadyRef.current
-    ? "Pinch to capture a clean background plate"
-    : phase === "vanished"
-      ? "Ghost · pinch to show live"
-      : "Live · pinch to vanish";
+  const statusText = !plateReadyRef.current ? "CAPTURE A CLEAN PLATE" : phase === "vanished" ? "GHOST ACTIVE" : "PORTAL READY · PINCH TO VANISH";
 
   return (
     <div className="ghost-shell">
-      <div className={`filter-container ghost-container ghost-container--${phase}`}>
-        {!isModelLoaded && !error && (
-          <div className="loading-overlay ghost-loading">
-            <div className="spinner" />
-            <p>Loading segmentation + hand tracking…</p>
-          </div>
-        )}
-
-        {error && (
-          <div className="loading-overlay ghost-loading">
-            <div className="ghost-error-mark">!</div>
-            <p>{error}</p>
-          </div>
-        )}
-
+      <div ref={containerRef} className={`filter-container ghost-container ghost-container--${phase}`}>
+        {!isModelLoaded && !error && <div className="loading-overlay ghost-loading"><div className="spinner" /><p>Loading segmentation + hand tracking…</p></div>}
+        {error && <div className="loading-overlay ghost-loading"><div className="ghost-error-mark">!</div><p>{error}</p></div>}
         {isModelLoaded && !hasStarted && !error && (
           <div className="loading-overlay start-screen ghost-start">
             <span className="ghost-orb" aria-hidden="true" />
-            <div>
-              <span className="mode-card__eyebrow">REAL-TIME PERSON SEGMENTATION</span>
-              <h2>Disappear on command.</h2>
-              <p>Pinch once for ghost mode. Release and pinch again to restore live video.</p>
-            </div>
-            <button className="btn-primary btn-ghost" onClick={startExperience}>
-              Enter Ghost Mode
-            </button>
+            <div><span className="mode-card__eyebrow">HAND LAB · GHOST MODE</span><h2>Disappear on command.</h2><p>Capture an empty background, return to frame, then pinch either hand to vanish while your tracked hand skeleton remains.</p></div>
+            <button className="btn-primary btn-ghost" onClick={startExperience}>Start camera</button>
           </div>
         )}
-
         <div className="camera-wrapper">
           <video ref={videoRef} autoPlay playsInline muted className="ghost-source-video" />
           <canvas ref={outputRef} className="camera-canvas ghost-output" />
-
-          {hasStarted && (
-            <>
-              <div className="ghost-hud">
-                <div className={`pinch-indicator ${isPinching ? "is-pinching" : ""}`}>
-                  <span className="pinch-dot" />
-                  {isPinching ? "PINCH DETECTED" : "SHOW YOUR HAND"}
-                </div>
-                <div className={`ghost-status ghost-status--${phase}`}>{statusText}</div>
-              </div>
-
-              {!plateReadyRef.current && (
-                <div className="plate-guide">
-                  {countdown === null ? (
-                    <>
-                      <span className="plate-guide__icon">⌁</span>
-                      <strong>Pinch, then step out of frame</strong>
-                      <span>We’ll capture the empty room in 3 seconds.</span>
-                      <button className="text-action" onClick={beginPlateCountdown}>
-                        Or capture with a tap
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      <span className="countdown-number">{countdown}</span>
-                      <strong>Step out of frame</strong>
-                      <span>Capturing your background plate…</span>
-                    </>
-                  )}
-                </div>
-              )}
-
-              <div className="ghost-controls">
-                {plateReadyRef.current && (
-                  <button className="control-button" onClick={captureScreen} aria-label="Capture image">
-                    Capture
-                  </button>
-                )}
-                <button className="control-button" onClick={resetPlate}>
-                  New plate
-                </button>
-                <button className="control-button control-button--stop" onClick={stopExperience}>
-                  Stop
-                </button>
-              </div>
-            </>
-          )}
+          {hasStarted && <>
+            <div className="ghost-hud">
+              <div className={`pinch-indicator ${isPinching ? "is-pinching" : ""}`}><span className="pinch-dot" />{isPinching ? "PINCH DETECTED" : `HANDS ${handCount}`}</div>
+              <div className={`ghost-status ghost-status--${phase}`}>{statusText}<small>{fps} FPS</small></div>
+            </div>
+            {!plateReadyRef.current && <div className="plate-guide">
+              {countdown === null ? <><span className="plate-guide__icon">⌁</span><strong>Pinch, then step out of frame</strong><span>The empty room will be captured after three seconds.</span><button className="text-action" onClick={beginPlateCountdown}>Start countdown</button></> : <><span className="countdown-number">{countdown}</span><strong>Step out of frame</strong><span>Space captures the plate early.</span></>}
+            </div>}
+            {plateReadyRef.current && <div className="ghost-meter" aria-label={`Ghost effect ${ghostPercent}%`}><span>GHOST {ghostPercent}%</span><div><i style={{ width: `${ghostPercent}%` }} /></div></div>}
+            <div className="ghost-controls">
+              {plateReadyRef.current && <><button className="control-button" onClick={toggleGhost}>{phase === "vanished" ? "Reappear" : "Vanish"}</button><button className="control-button" onClick={captureScreen}>Capture</button></>}
+              <button className={`control-button ${healing ? "is-active" : ""}`} onClick={toggleHealing} title="Slowly correct background exposure using person-free pixels">Healing {healing ? "on" : "off"}</button>
+              <button className="control-button" onClick={resetPlate}>New plate</button>
+              <button className="control-button control-button--stop" onClick={stopExperience}>Stop</button>
+            </div>
+          </>}
         </div>
       </div>
-
-      <div className="ghost-steps" aria-label="Ghost Mode instructions">
-        <span><b>01</b> Pinch</span>
-        <i />
-        <span><b>02</b> Step away</span>
-        <i />
-        <span><b>03</b> Return + pinch to vanish</span>
+      <div className="ghost-steps" aria-label="Ghost Mode keyboard controls">
+        <span><b>PINCH / G</b> toggle ghost</span><i /><span><b>B</b> new plate</span><i /><span><b>H</b> healing</span><i /><span><b>F</b> fullscreen</span>
       </div>
     </div>
   );
