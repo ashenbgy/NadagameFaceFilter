@@ -3,8 +3,9 @@
 import { useState } from "react";
 import FaceFilter from "./FaceFilter";
 import GhostFilter from "./GhostFilter";
+import LieDetector from "./LieDetector";
 
-type FilterMode = "yaka" | "ghost";
+type FilterMode = "yaka" | "ghost" | "lie";
 
 export default function FilterStudio() {
   const [mode, setMode] = useState<FilterMode>("yaka");
@@ -33,10 +34,21 @@ export default function FilterStudio() {
           <strong>Ghost Mode</strong>
           <span>Pinch-controlled invisibility</span>
         </button>
+
+        <button
+          className={`mode-card mode-card--lie ${mode === "lie" ? "is-active" : ""}`}
+          onClick={() => setMode("lie")}
+          role="tab"
+          aria-selected={mode === "lie"}
+        >
+          <span className="mode-card__eyebrow">03 · BIOSIGNAL</span>
+          <strong>Stress Scan</strong>
+          <span>Webcam pulse & tension index</span>
+        </button>
       </div>
 
       <div role="tabpanel" className="mode-stage" key={mode}>
-        {mode === "yaka" ? <FaceFilter /> : <GhostFilter />}
+        {mode === "yaka" ? <FaceFilter /> : mode === "ghost" ? <GhostFilter /> : <LieDetector />}
       </div>
     </section>
   );
