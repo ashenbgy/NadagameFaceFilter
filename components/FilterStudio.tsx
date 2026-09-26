@@ -3,9 +3,9 @@
 import { useState } from "react";
 import FaceFilter from "./FaceFilter";
 import GhostFilter from "./GhostFilter";
-import LieDetector from "./LieDetector";
+import FruitNinja from "./FruitNinja";
 
-type FilterMode = "yaka" | "ghost" | "lie";
+type FilterMode = "yaka" | "ghost" | "fruit";
 
 export default function FilterStudio() {
   const [mode, setMode] = useState<FilterMode>("yaka");
@@ -36,19 +36,19 @@ export default function FilterStudio() {
         </button>
 
         <button
-          className={`mode-card mode-card--lie ${mode === "lie" ? "is-active" : ""}`}
-          onClick={() => setMode("lie")}
+          className={`mode-card mode-card--fruit ${mode === "fruit" ? "is-active" : ""}`}
+          onClick={() => setMode("fruit")}
           role="tab"
-          aria-selected={mode === "lie"}
+          aria-selected={mode === "fruit"}
         >
-          <span className="mode-card__eyebrow">03 · BIOSIGNAL</span>
-          <strong>Stress Scan</strong>
-          <span>Webcam pulse & tension index</span>
+          <span className="mode-card__eyebrow">03 · GAME</span>
+          <strong>Fruit Ninja</strong>
+          <span>Swipe to slice, dodge bombs</span>
         </button>
       </div>
 
       <div role="tabpanel" className="mode-stage" key={mode}>
-        {mode === "yaka" ? <FaceFilter /> : mode === "ghost" ? <GhostFilter /> : <LieDetector />}
+        {mode === "yaka" ? <FaceFilter /> : mode === "ghost" ? <GhostFilter /> : <FruitNinja />}
       </div>
     </section>
   );

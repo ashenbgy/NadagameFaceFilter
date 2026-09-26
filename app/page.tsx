@@ -18,7 +18,7 @@ export default function Home() {
       <FilterStudio />
 
       <footer style={{ marginTop: '2rem', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '0.9rem', animation: 'fadeUp 1s cubic-bezier(0.16, 1, 0.3, 1) forwards' }}>
-        <p>developed by ashenbgy</p>
+        <p>Developed by ashenbgy</p>
       </footer>
     </main>
   );
